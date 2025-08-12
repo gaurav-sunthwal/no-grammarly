@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+// CORS headers configuration
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 // Handle GET requests (for testing)
 export async function GET() {
-  return NextResponse.json({ message: "Gemini API endpoint is working. Use POST to send text for correction." });
+  return NextResponse.json(
+    { message: "Gemini API endpoint is working. Use POST to send text for correction." },
+    { headers: corsHeaders }
+  );
 }
 
 // Handle POST requests (main functionality)
@@ -18,12 +28,18 @@ export async function POST(req: Request) {
 
     if (!text || !text.trim()) {
       console.log("Error: No text provided");
-      return NextResponse.json({ error: "Text is required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Text is required" }, 
+        { status: 400, headers: corsHeaders }
+      );
     }
 
     if (!apiKey || !apiKey.trim()) {
       console.log("Error: No API key provided");
-      return NextResponse.json({ error: "API key is required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "API key is required" }, 
+        { status: 400, headers: corsHeaders }
+      );
     }
 
     console.log("Initializing Google Generative AI");
@@ -39,21 +55,31 @@ export async function POST(req: Request) {
     console.log("Gemini API response received, length:", corrected.length);
     console.log("Corrected text preview:", corrected.substring(0, 100) + "...");
 
-    return NextResponse.json({ corrected });
+    return NextResponse.json(
+      { corrected },
+      { headers: corsHeaders }
+    );
   } catch (error: any) {
     console.error("API Error:", error);
     
     if (error.message?.includes("API_KEY_INVALID")) {
-      return NextResponse.json({ error: "Invalid API key. Please check your Gemini API key." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid API key. Please check your Gemini API key." }, 
+        { status: 400, headers: corsHeaders }
+      );
     }
     
     if (error.message?.includes("QUOTA_EXCEEDED")) {
-      return NextResponse.json({ error: "API quota exceeded. Please try again later." }, { status: 429 });
+      return NextResponse.json(
+        { error: "API quota exceeded. Please try again later." }, 
+        { status: 429, headers: corsHeaders }
+      );
     }
     
-    return NextResponse.json({ 
-      error: error.message || "An error occurred while processing your request" 
-    }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || "An error occurred while processing your request" }, 
+      { status: 500, headers: corsHeaders }
+    );
   }
 }
 
@@ -61,10 +87,6 @@ export async function POST(req: Request) {
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 200,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    },
+    headers: corsHeaders,
   });
 }
