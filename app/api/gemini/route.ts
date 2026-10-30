@@ -1,92 +1,50 @@
 import { NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GeminiError, GEMINI_MODEL, generateText, hasServerKey, resolveApiKey } from "../../lib/gemini";
 
-// CORS headers configuration
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-// Handle GET requests (for testing)
-export async function GET() {
-  return NextResponse.json(
-    { message: "Gemini API endpoint is working. Use POST to send text for correction." },
-    { headers: corsHeaders }
-  );
+function json(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: corsHeaders });
 }
 
-// Handle POST requests (main functionality)
+// Tells the UI whether a key is set in .env, so users don't have to enter one.
+export async function GET() {
+  return json({ ok: true, serverKeyConfigured: hasServerKey(), model: GEMINI_MODEL });
+}
+
 export async function POST(req: Request) {
+  let body: any;
   try {
-    console.log("API route /api/gemini called");
-    
-    const body = await req.json();
-    console.log("Request body received:", { text: body.text ? body.text.substring(0, 50) + "..." : "no text", hasApiKey: !!body.apiKey });
-    
-    const { text, apiKey } = body;
+    body = await req.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
+  }
 
-    if (!text || !text.trim()) {
-      console.log("Error: No text provided");
-      return NextResponse.json(
-        { error: "Text is required" }, 
-        { status: 400, headers: corsHeaders }
-      );
-    }
+  const text = typeof body?.text === "string" ? body.text : "";
+  if (!text.trim()) return json({ error: "Text is required" }, 400);
 
-    if (!apiKey || !apiKey.trim()) {
-      console.log("Error: No API key provided");
-      return NextResponse.json(
-        { error: "API key is required" }, 
-        { status: 400, headers: corsHeaders }
-      );
-    }
-
-    console.log("Initializing Google Generative AI");
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-    const prompt = `Fix grammar and spelling mistakes in this text, without changing its meaning:\n\n${text}`;
-    console.log("Sending request to Gemini API");
-
-    const result = await model.generateContent(prompt);
-    const corrected = result.response.text();
-    
-    console.log("Gemini API response received, length:", corrected.length);
-    console.log("Corrected text preview:", corrected.substring(0, 100) + "...");
-
-    return NextResponse.json(
-      { corrected },
-      { headers: corsHeaders }
+  const apiKey = resolveApiKey(body?.apiKey);
+  if (!apiKey) {
+    return json(
+      { error: "No Gemini API key. Add GEMINI_API_KEY to .env.local or save a key in the app." },
+      400
     );
-  } catch (error: any) {
-    console.error("API Error:", error);
-    
-    if (error.message?.includes("API_KEY_INVALID")) {
-      return NextResponse.json(
-        { error: "Invalid API key. Please check your Gemini API key." }, 
-        { status: 400, headers: corsHeaders }
-      );
-    }
-    
-    if (error.message?.includes("QUOTA_EXCEEDED")) {
-      return NextResponse.json(
-        { error: "API quota exceeded. Please try again later." }, 
-        { status: 429, headers: corsHeaders }
-      );
-    }
-    
-    return NextResponse.json(
-      { error: error.message || "An error occurred while processing your request" }, 
-      { status: 500, headers: corsHeaders }
-    );
+  }
+
+  try {
+    const corrected = await generateText(apiKey, text);
+    return json({ corrected });
+  } catch (error) {
+    if (error instanceof GeminiError) return json({ error: error.message }, error.status);
+    console.error("Gemini route error:", error);
+    return json({ error: "An unexpected error occurred" }, 500);
   }
 }
 
-// Handle OPTIONS requests (for CORS preflight)
 export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 200,
-    headers: corsHeaders,
-  });
+  return new NextResponse(null, { status: 200, headers: corsHeaders });
 }

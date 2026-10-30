@@ -31,12 +31,15 @@ cd no-grammarly
 npm install
 ```
 
-3. Run the development server:
+3. Add your Gemini API key: copy `.env.example` to `.env.local` and set `GEMINI_API_KEY`.
+   (Optional — users can also save their own key in the app. A key saved in the app takes priority over the `.env` key.)
+
+4. Run the development server:
 ```bash
 npm run dev
 ```
 
-4. Open [http://localhost:3000](http://localhost:3000) in your browser
+5. Open [http://localhost:3000](http://localhost:3000) in your browser
 
 ### First Time Setup
 

@@ -2,20 +2,42 @@
 import { useState, useEffect } from "react";
 import { FiKey, FiArrowRight } from "react-icons/fi";
 import { motion } from "framer-motion";
+import { fetchServerKeyConfigured, getStoredKey, validateAndSaveKey } from "./lib/apiKeyClient";
 
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
+  const [checking, setChecking] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const storedKey = localStorage.getItem("gemini_api_key");
-    if (storedKey) window.location.href = "/correct";
+    // Skip this screen if a key is already saved or set in the server's .env
+    (async () => {
+      if (getStoredKey() || (await fetchServerKeyConfigured())) {
+        window.location.href = "/correct";
+        return;
+      }
+      setChecking(false);
+    })();
   }, []);
 
-  const saveKey = () => {
-    if (!apiKey.trim()) return alert("Enter a valid API key");
-    localStorage.setItem("gemini_api_key", apiKey.trim());
+  const saveKey = async () => {
+    if (!apiKey.trim() || saving) return;
+    setSaving(true);
+    setError("");
+    const err = await validateAndSaveKey(apiKey);
+    setSaving(false);
+    if (err) return setError(err);
     window.location.href = "/correct";
   };
+
+  if (checking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 text-gray-300">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900">
@@ -37,7 +59,7 @@ export default function Home() {
             Your personal writing companion powered by Google Gemini
           </p>
         </div>
-        
+
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-2 text-white">Google Gemini API Key</label>
@@ -48,26 +70,30 @@ export default function Home() {
                 placeholder="Enter your API key here..."
                 className="flex-1 bg-transparent outline-none text-white placeholder-gray-400"
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && saveKey()}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  setError("");
+                }}
+                onKeyDown={(e) => e.key === "Enter" && saveKey()}
               />
             </div>
+            {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
           </div>
-          
+
           <button
             onClick={saveKey}
-            disabled={!apiKey.trim()}
+            disabled={!apiKey.trim() || saving}
             className="w-full py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 rounded-lg font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            <span>Get Started</span>
-            <FiArrowRight className="w-4 h-4" />
+            <span>{saving ? "Checking key..." : "Get Started"}</span>
+            {!saving && <FiArrowRight className="w-4 h-4" />}
           </button>
         </div>
-        
+
         <div className="text-xs text-gray-400 text-center mt-6">
-          <p>Don't have an API key? Get one from</p>
+          <p>Don&apos;t have an API key? Get one from</p>
           <a
-            href="https://makersuite.google.com/app/apikey"
+            href="https://aistudio.google.com/app/apikey"
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-400 hover:text-blue-300 underline"

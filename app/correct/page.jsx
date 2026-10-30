@@ -1,5 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
+import {
+  clearStoredKey,
+  fetchServerKeyConfigured,
+  getStoredKey,
+  validateAndSaveKey,
+} from "../lib/apiKeyClient";
 
 export default function EnhancedGrammarFixer() {
   const [input, setInput] = useState("");
@@ -7,6 +13,9 @@ export default function EnhancedGrammarFixer() {
   const [loading, setLoading] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [showApiKeyForm, setShowApiKeyForm] = useState(false);
+  const [serverKeyConfigured, setServerKeyConfigured] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyError, setKeyError] = useState("");
   
   // New features state
   const [selectedTone, setSelectedTone] = useState("normal");
@@ -50,25 +59,52 @@ export default function EnhancedGrammarFixer() {
   ];
 
   useEffect(() => {
-    const storedApiKey = localStorage.getItem("gemini_api_key");
-    const storedHistory = localStorage.getItem("grammar_history");
-    
-    if (storedApiKey) {
-      setApiKey(storedApiKey);
-    } else {
-      setShowApiKeyForm(true);
-    }
+    const storedApiKey = getStoredKey();
+    if (storedApiKey) setApiKey(storedApiKey);
 
-    if (storedHistory) {
-      setHistory(JSON.parse(storedHistory));
+    // Only ask for a key if none is saved and the server has none in .env
+    fetchServerKeyConfigured().then((configured) => {
+      setServerKeyConfigured(configured);
+      if (!storedApiKey && !configured) setShowApiKeyForm(true);
+    });
+
+    try {
+      const storedHistory = localStorage.getItem("grammar_history");
+      if (storedHistory) setHistory(JSON.parse(storedHistory));
+      const storedSettings = localStorage.getItem("grammar_settings");
+      if (storedSettings) {
+        const s = JSON.parse(storedSettings);
+        if (s.tone) setSelectedTone(s.tone);
+        if (s.language) setSelectedLanguage(s.language);
+        if (s.level) setImprovementLevel(s.level);
+        if (s.targetWordCount) setTargetWordCount(s.targetWordCount);
+        if (typeof s.explanations === "boolean") setShowExplanations(s.explanations);
+        if (typeof s.preserveFormatting === "boolean") setPreserveFormatting(s.preserveFormatting);
+      }
+    } catch {
+      // Ignore corrupted local data
     }
   }, []);
 
-  const saveApiKey = () => {
-    if (apiKey.trim()) {
-      localStorage.setItem("gemini_api_key", apiKey.trim());
-      setShowApiKeyForm(false);
+  const saveApiKey = async () => {
+    if (!apiKey.trim() || savingKey) return;
+    setSavingKey(true);
+    setKeyError("");
+    const err = await validateAndSaveKey(apiKey);
+    setSavingKey(false);
+    if (err) {
+      setKeyError(err);
+      return;
     }
+    setApiKey(apiKey.trim());
+    setShowApiKeyForm(false);
+  };
+
+  const useServerKey = () => {
+    clearStoredKey();
+    setApiKey("");
+    setKeyError("");
+    setShowApiKeyForm(false);
   };
 
   const saveToHistory = (original, corrected, settings) => {
@@ -85,64 +121,23 @@ export default function EnhancedGrammarFixer() {
     localStorage.setItem("grammar_history", JSON.stringify(newHistory));
   };
 
-  const buildPrompt = () => {
-    // Tone instructions
-    const toneInstructions = {
-      formal: "formal, professional, and suitable for academic or business contexts",
-      casual: "casual, friendly, and conversational with natural, everyday language",
-      funny: "humorous and entertaining while maintaining clarity",
-      normal: "balanced and natural, clear and easy to understand",
-      persuasive: "compelling and convincing with strong, confident phrasing",
-      creative: "creative with vivid descriptions and imaginative language"
-    };
+  const fixGrammar = async (toneOverride) => {
+    const tone = typeof toneOverride === "string" ? toneOverride : selectedTone;
+    const storedApiKey = getStoredKey();
 
-    // Improvement level instructions
-    const levelInstructions = {
-      light: "Make minimal changes, only fix essential grammar, spelling, and punctuation errors",
-      moderate: "Fix errors and make moderate improvements to clarity and flow",
-      heavy: "Completely rewrite and restructure for maximum clarity and impact"
-    };
-
-    let prompt = `CRITICAL: You must respond ONLY in this exact JSON format, no other text:
-
-{
-  "corrected_text": "your corrected text here"${showExplanations ? ',\n  "explanation": "brief explanation of changes"' : ''}
-}
-
-Instructions:
-- You are an expert ${selectedLanguage} grammar corrector
-- Make the text ${toneInstructions[selectedTone]}
-- ${levelInstructions[improvementLevel]}`;
-
-    if (targetWordCount) {
-      prompt += `\n- Target approximately ${targetWordCount} words`;
-    }
-
-    if (preserveFormatting) {
-      prompt += `\n- Preserve formatting like line breaks and paragraph structure`;
-    }
-
-    prompt += `\n- NEVER include explanations, introductions, or extra text outside the JSON
-- NEVER say "here's the corrected text" or similar phrases
-- RETURN ONLY THE JSON FORMAT ABOVE
-
-Text to improve: "${input}"`;
-
-    return prompt;
-  };
-
-  const fixGrammar = async () => {
-    setLoading(true);
-    const storedApiKey = localStorage.getItem("gemini_api_key");
-
-    if (!storedApiKey) {
-      alert("API Key missing. Please enter it first.");
-      setLoading(false);
+    if (!storedApiKey && !serverKeyConfigured) {
+      setShowApiKeyForm(true);
       return;
     }
 
+    setLoading(true);
     try {
-      const prompt = buildPrompt();
+      const levelText =
+        improvementLevel === "light"
+          ? "Fix only grammar/spelling errors."
+          : improvementLevel === "moderate"
+          ? "Fix errors and improve clarity."
+          : "Rewrite for maximum clarity.";
 
       const res = await fetch("/api/gemini", {
         method: "POST",
@@ -153,51 +148,44 @@ Text to improve: "${input}"`;
         body: JSON.stringify({
           text: `You are a grammar correction AI. Respond with ONLY the corrected text, no explanations, no introductions, no extra words. Just return the improved text directly.
 
-Make it ${selectedTone} tone. ${improvementLevel === 'light' ? 'Fix only grammar/spelling errors.' : improvementLevel === 'moderate' ? 'Fix errors and improve clarity.' : 'Rewrite for maximum clarity.'}${targetWordCount ? ` Target ${targetWordCount} words.` : ''}${preserveFormatting ? ' Preserve formatting.' : ''}
+Write in ${selectedLanguage}. Make it ${tone} tone. ${levelText}${targetWordCount ? ` Target ${targetWordCount} words.` : ""}${preserveFormatting ? " Preserve formatting." : ""}${showExplanations ? " After the text, add a line '---EXPLANATION---' followed by a brief explanation of the changes." : ""}
 
 Text: ${input}`,
-          apiKey: storedApiKey,
+          // Omitted when empty, so the server uses GEMINI_API_KEY from .env
+          ...(storedApiKey ? { apiKey: storedApiKey } : {}),
         }),
       });
 
-      if (!res.ok) {
-        const errorText = await res.text();
-        setOutput(`API Error: ${res.status} - ${errorText}`);
-        setLoading(false);
-        return;
-      }
+      const data = await res.json().catch(() => ({}));
 
-      const data = await res.json();
-
-      if (data.error) {
-        setOutput(`Error: ${data.error}`);
+      if (!res.ok || data.error) {
+        setOutput(`Error: ${data.error || `Request failed (${res.status})`}`);
+        if (res.status === 401 && storedApiKey) {
+          setKeyError(data.error);
+          setShowApiKeyForm(true);
+        }
       } else {
-        let result = data.corrected || "Error occurred";
-        
-        // Clean up any unwanted prefixes or explanations
-        result = result.replace(/^(Here's the corrected text:|Here is the corrected text:|Corrected text:|Fixed text:)/i, '').trim();
-        result = result.replace(/^["']|["']$/g, '').trim(); // Remove quotes
-        
+        let result = data.corrected || "";
+
+        // Clean up any unwanted prefixes or wrapping quotes
+        result = result.replace(/^(Here's the corrected text:|Here is the corrected text:|Corrected text:|Fixed text:)/i, "").trim();
+        result = result.replace(/^["']|["']$/g, "").trim();
+
         setOutput(result);
-        
-        // Save to history
+
         const settings = {
-          tone: selectedTone,
+          tone,
           language: selectedLanguage,
           level: improvementLevel,
           targetWordCount,
-          explanations: showExplanations
+          explanations: showExplanations,
         };
         saveToHistory(input, result, settings);
         setCurrentHistoryIndex(0);
       }
     } catch (error) {
       console.error("Fetch error:", error);
-      if (error.name === "TypeError" && error.message.includes("fetch")) {
-        setOutput("Network error: Please check if the server is running and try again.");
-      } else {
-        setOutput(`Error: ${error.message || "Unknown error occurred"}`);
-      }
+      setOutput("Network error: Please check if the server is running and try again.");
     }
     setLoading(false);
   };
@@ -240,7 +228,11 @@ Text: ${input}`,
               <input
                 type="password"
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  setKeyError("");
+                }}
+                onKeyDown={(e) => e.key === "Enter" && saveApiKey()}
                 placeholder="Enter your API key here..."
                 className="w-full p-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
@@ -248,15 +240,26 @@ Text: ${input}`,
 
             <button
               onClick={saveApiKey}
-              disabled={!apiKey.trim()}
+              disabled={!apiKey.trim() || savingKey}
               className="w-full py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 rounded-lg font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save & Continue
+              {savingKey ? "Checking key..." : "Save & Continue"}
             </button>
 
+            {keyError && <p className="text-red-400 text-sm text-center">{keyError}</p>}
+
+            {serverKeyConfigured && (
+              <button
+                onClick={useServerKey}
+                className="w-full py-2 text-sm text-gray-300 hover:text-white underline"
+              >
+                Use the server&apos;s default key instead
+              </button>
+            )}
+
             <div className="text-xs text-gray-400 text-center">
-              <p>Don't have an API key? Get one from</p>
-              <a href="https://makersuite.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">
+              <p>Don&apos;t have an API key? Get one from</p>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">
                 Google AI Studio
               </a>
             </div>
@@ -336,7 +339,7 @@ Text: ${input}`,
               </div>
 
               <button
-                onClick={fixGrammar}
+                onClick={() => fixGrammar()}
                 disabled={loading || !input.trim()}
                 className="w-full py-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 rounded-xl font-medium text-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
               >
@@ -406,8 +409,7 @@ Text: ${input}`,
                       <button
                         onClick={() => {
                           setSelectedTone('formal');
-                          // Auto-run if we have input
-                          if (input.trim()) setTimeout(fixGrammar, 100);
+                          if (input.trim()) fixGrammar('formal');
                         }}
                         className="py-1 px-2 bg-purple-600/20 hover:bg-purple-600/40 rounded text-xs transition-colors"
                       >
@@ -416,7 +418,7 @@ Text: ${input}`,
                       <button
                         onClick={() => {
                           setSelectedTone('casual');
-                          if (input.trim()) setTimeout(fixGrammar, 100);
+                          if (input.trim()) fixGrammar('casual');
                         }}
                         className="py-1 px-2 bg-blue-600/20 hover:bg-blue-600/40 rounded text-xs transition-colors"
                       >
@@ -425,7 +427,7 @@ Text: ${input}`,
                       <button
                         onClick={() => {
                           setSelectedTone('funny');
-                          if (input.trim()) setTimeout(fixGrammar, 100);
+                          if (input.trim()) fixGrammar('funny');
                         }}
                         className="py-1 px-2 bg-yellow-600/20 hover:bg-yellow-600/40 rounded text-xs transition-colors"
                       >
@@ -649,9 +651,10 @@ Text: ${input}`,
             </button>
             <button
               onClick={() => {
-                localStorage.removeItem("gemini_api_key");
+                clearStoredKey();
                 setShowApiKeyForm(true);
                 setApiKey("");
+                setKeyError("");
               }}
               className="hover:text-white transition-colors underline"
             >
